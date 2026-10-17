@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "koemoji"
+version = "0.1.0"
+description = "CPUだけで動くオフライン日本語文字起こしツール（faster-whisper / Windows・macOS・Linux対応）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ametya" }]
+keywords = ["文字起こし", "音声認識", "whisper", "japanese", "transcription", "offline", "cpu"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "faster-whisper>=1.1.0",
+    "av>=14,<19",
+    "sherpa-onnx>=1.13.0",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.11"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+koemoji = "koemoji.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ametya/koemoji"
+
+[tool.setuptools.packages.find]
+include = ["koemoji*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
