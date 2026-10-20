@@ -25,8 +25,9 @@ GIGAZINE で紹介された [Embedding Gemma Transcribe](https://gigazine.net/ne
 ## 特徴
 
 - **CPU 前提**（GPU 不要・int8 量子化でメモリも省める）
+- **高精度モデルを標準搭載**（Whisper large-v3-turbo。日本語特化の kotoba-whisper も選択可）
 - **完全ローカル処理**。音声がサーバーに送られることはありません
-- **初回だけモデルをダウンロード**（文字起こし `small` 約480MB / 話者分離 約40MB）。以後は**オフラインで動作**
+- **初回だけモデルをダウンロード**（文字起こし `turbo` 約820MB / 話者分離 約40MB）。以後は**オフラインで動作**
 - **日本語に最適化**（言語固定 `ja`、VAD で無音区間を自動スキップ）
 - **幅広い入力形式**: wav / mp3 / m4a / aac / flac / ogg / opus / wma / amr / aiff、動画は mp4 / mkv / mov / avi / webm / wmv / mpg / ts / mts / 3gp など
 - **話者分離**（会議・インタビュー・鼎談など、複数人の会話を会話ログ化）
@@ -56,7 +57,7 @@ GIGAZINE で紹介された [Embedding Gemma Transcribe](https://gigazine.net/ne
 3. `koemoji-gui.exe` をダブルクリック → GUI が起動
 4. CLI で使いたい場合は `koemoji.exe` を PowerShell / コマンドプロンプトから実行
 
-> 初回起動時にモデル（既定: 文字起こし用 small・約480MB）をダウンロードします。2回目以降はネットなしで動きます。
+> 初回起動時にモデル（既定: 文字起こし用 turbo・約820MB）をダウンロードします。2回目以降はネットなしで動きます。
 > 署名なし exe のため、Windows SmartScreen の警告（「詳細情報」→「実行」）が出ることがあります。
 
 ### 方法2: pip でインストール（Python 3.10 以上）
@@ -79,7 +80,7 @@ koemoji-gui.exe    # 配布版の場合
 ```
 
 1. 音声・動画ファイルを選択（Teams録画の mp4 もそのまま選べます）
-2. モデルを選択（迷ったら `small`、精度重視なら `medium`）
+2. モデルを選択（迷ったら既定の `turbo` のまま。軽さ重視なら `small`）
 3. 会議なら「**話者分離**」にチェック（話者数が決まっていれば指定）
 4. 「文字起こし開始」→ 完了後にコピー / 保存（txt・会話ログ・SRT・VTT）
 
@@ -100,12 +101,12 @@ koemoji transcribe 講演.mp4 -m medium --initial-prompt "株式会社ほげ、�
 
 # モデル一覧と事前ダウンロード（配布先でオフライン運用したい場合など）
 koemoji models
-koemoji models --download small --download-diarization
+koemoji models --download turbo --download-diarization
 ```
 
 | オプション | 説明 | 既定 |
 |---|---|---|
-| `-m, --model` | 使用モデル | `small` |
+| `-m, --model` | 使用モデル | `turbo` |
 | `-l, --language` | 言語コード（`auto` で自動判定） | `ja` |
 | `-o, --output-dir` | 出力先ディレクトリ | 入力と同じ場所 |
 | `--formats` | `txt,log,srt,vtt` をカンマ区切り（`txt` は話者分離時、自動で会話ログ形式） | `txt` |
@@ -115,6 +116,7 @@ koemoji models --download small --download-diarization
 | `--diarize-threshold` | 話者の分かれやすさ（0.3〜0.8 目安） | `0.5` |
 | `--no-vad` | 無音スキップを無効化 | VAD 有効 |
 | `--beam-size` | ビームサイズ（大きいほど丁寧・遅い） | `5` |
+| `--compute-type` | 計算精度（`int8` / `int8_float32` / `float32`）。精度重視なら `int8_float32` か `float32` | `int8` |
 | `--initial-prompt` | 固有名詞などのヒント文 | なし |
 | `--cpu-threads` | 使用スレッド数 | 自動（全コア） |
 | `-q, --quiet` | 進捗表示を抑制 | - |
@@ -125,13 +127,23 @@ koemoji models --download small --download-diarization
 
 | モデル | DLサイズ | 速度目安 | 精度 | 用途 |
 |---|---|---|---|---|
-| tiny | 約75MB | 最速（20倍速〜） | 低 | 動作確認 |
-| base | 約145MB | 高速 | やや低 | 軽量運用 |
-| **small** | 約480MB | 標準（5〜10倍速程度） | 良好 | **おすすめ** |
-| medium | 約1.5GB | 低速（1〜3倍速程度） | 高 | 精度重視（会議向き） |
-| large-v3 | 約3.1GB | かなり低速 | 最高 | 最高精度重視 |
+| **turbo** | 約820MB | 標準（2〜4倍速程度） | 高 | **おすすめ（既定）** |
+| kotoba | 約1.5GB | 標準（2〜3倍速程度） | 最高（日本語特化） | 日本語の精度重視（**話者分離は不可**） |
+| small | 約480MB | 高速（5〜10倍速程度） | 良好 | 速度重視 |
+| medium | 約1.5GB | 低速（1〜2倍速程度） | 高 | 精度重視（話者分離可） |
+| large-v3 | 約3.1GB | かなり低速（1倍速未満） | 最高 | 最高精度重視（話者分離可） |
+| tiny / base | 約75MB / 145MB | 最速 / 高速 | 低 | 動作確認・軽量運用 |
 
-※ 速度は8コア前後のCPUでの目安。話者分離を有効にすると、その分の処理時間（おおむね音声の0.5〜2倍程度）が追加されます。
+※ 速度は8コア前後のCPUでの目安。話者分離を有効にすると処理時間が少し増えます（上記 turbo の実測は約2.3倍速）。
+※ `kotoba`（kotoba-whisper v2.0）は日本語特化で文字精度が高い一方、単語タイムスタンプに未対応のため `--diarize` と併用できません（指定すると分かりやすいエラーを表示します）。
+
+### 精度をもう一段上げたいとき
+
+1. `--compute-type int8_float32`（または `float32`）を付ける（速度は少し落ちます）
+2. `--beam-size 8` のようにビーム幅を広げる
+3. `--initial-prompt "株式会社ほげ、山田さん、プロジェクトふが"` で固有名詞をヒントとして与える
+4. 日本語特化の `-m kotoba` を使う（話者分離を使わない場合）
+5. 録音品質を上げる（マイクに近づく・ノイズを減らす）のが最も効果的です
 
 ### 話者分離モデル（初回DL）
 
@@ -154,7 +166,7 @@ koemoji models --download small --download-diarization
 
 - 一度モデルをダウンロードすれば、以後の文字起こし・話者分離は通信しません
 - 別のPCへは `%LOCALAPPDATA%\koemoji\models` フォルダをコピーすれば、そのままオフライン運用できます
-- `koemoji models --download small --download-diarization` で事前ダウンロードしておくと安心です
+- `koemoji models --download turbo --download-diarization` で事前ダウンロードしておくと安心です
 
 ## ビルド（配布用 zip の作成）
 
@@ -197,3 +209,5 @@ pytest
 - [faster-whisper (SYSTRAN)](https://github.com/SYSTRAN/faster-whisper) / [CTranslate2](https://github.com/OpenNMT/CTranslate2) / [OpenAI Whisper](https://github.com/openai/whisper)
 - 話者分離: [sherpa-onnx (k2-fsa)](https://github.com/k2-fsa/sherpa-onnx)（NVIDIA TitaNet / 3D-Speaker 声紋モデル）
 - 文字起こしモデル配布: [Systran/faster-whisper-* (Hugging Face)](https://huggingface.co/Systran)
+- [Whisper large-v3-turbo (OpenAI)](https://huggingface.co/openai/whisper-large-v3-turbo) / CTranslate2 変換: [deepdml/faster-whisper-large-v3-turbo-ct2](https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2)
+- 日本語特化モデル: [Kotoba-Whisper (Kotoba Technologies)](https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-faster)

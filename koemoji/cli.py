@@ -78,6 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_tr.add_argument("--no-vad", action="store_true", help="無音区間スキップ（VAD）を無効化")
     p_tr.add_argument("--beam-size", type=int, default=5, help="ビームサイズ（既定: 5）")
     p_tr.add_argument(
+        "--compute-type", choices=["int8", "int8_float32", "float32"], default="int8",
+        help="計算精度。精度重視なら float32（遅い）、バランスなら int8_float32（既定: int8）",
+    )
+    p_tr.add_argument(
         "--initial-prompt", default=None,
         help="認識を誘導するヒント文（例: 「株式会社ほげ、プロジェクトふが」）",
     )
@@ -111,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_m.add_argument(
         "--download-diarization", action="store_true",
-        help="話者分離モデル（segmentation + 声紋モデル）を事前ダウンロード",
+        help="話者分離用の声紋モデルを事前ダウンロード",
     )
     p_m.add_argument(
         "--embedding", choices=["titanet", "3dspeaker"], default=DEFAULT_EMBEDDING,
@@ -145,6 +149,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             language=args.language,
             vad=not args.no_vad,
             beam_size=args.beam_size,
+            compute_type=args.compute_type,
             initial_prompt=args.initial_prompt,
             model_dir=model_dir,
             cpu_threads=args.cpu_threads,

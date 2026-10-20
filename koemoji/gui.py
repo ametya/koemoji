@@ -16,7 +16,7 @@ from .core import (
     TranscribeResult,
     transcribe_file,
 )
-from .models import DEFAULT_MODEL, MODEL_CATALOG
+from .models import DEFAULT_MODEL, MODEL_CATALOG, get_spec
 
 APP_TITLE = f"声文字 (koemoji) v{__version__}"
 
@@ -67,7 +67,7 @@ class App:
         labels = [MODEL_CATALOG[key].label for key in self.model_keys]
         self.model_var = tk.StringVar(value=MODEL_CATALOG[DEFAULT_MODEL].label)
         combo = ttk.Combobox(
-            opts_row, textvariable=self.model_var, values=labels, state="readonly", width=34
+            opts_row, textvariable=self.model_var, values=labels, state="readonly", width=40
         )
         combo.pack(side="left", padx=6)
         self.vad_var = tk.BooleanVar(value=True)
@@ -165,9 +165,18 @@ class App:
 
         speakers_raw = self.speakers_var.get()
         num_speakers = int(speakers_raw) if speakers_raw.isdigit() else -1
+        model_key = self._selected_model()
+
+        if self.diarize_var.get() and not get_spec(model_key).supports_word_timestamps:
+            messagebox.showerror(
+                APP_TITLE,
+                f"モデル「{model_key}」は話者分離に対応していません。\n"
+                "話者分離を使う場合は turbo / small / medium / large-v3 を選んでください。",
+            )
+            return
 
         options = TranscribeOptions(
-            model=self._selected_model(),
+            model=model_key,
             language="ja",
             vad=self.vad_var.get(),
             initial_prompt=self.prompt_var.get().strip() or None,

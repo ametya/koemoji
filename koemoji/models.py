@@ -21,6 +21,7 @@ class ModelSpec:
     speed: str
     accuracy: str
     note: str
+    supports_word_timestamps: bool = True
 
     @property
     def label(self) -> str:
@@ -28,14 +29,31 @@ class ModelSpec:
 
 
 MODEL_CATALOG: dict[str, ModelSpec] = {
-    "tiny": ModelSpec("tiny", "Systran/faster-whisper-tiny", "約75MB", "最速", "低", "動作確認用"),
-    "base": ModelSpec("base", "Systran/faster-whisper-base", "約145MB", "高速", "やや低", "軽量"),
-    "small": ModelSpec("small", "Systran/faster-whisper-small", "約480MB", "標準", "良好", "おすすめ"),
+    "turbo": ModelSpec(
+        "turbo",
+        "vokasug/faster-whisper-large-v3-turbo-int8",
+        "約820MB",
+        "標準",
+        "高",
+        "バランス・おすすめ",
+    ),
+    "kotoba": ModelSpec(
+        "kotoba",
+        "kotoba-tech/kotoba-whisper-v2.0-faster",
+        "約1.5GB",
+        "標準",
+        "最高（日本語）",
+        "日本語特化・話者分離不可",
+        supports_word_timestamps=False,
+    ),
+    "small": ModelSpec("small", "Systran/faster-whisper-small", "約480MB", "高速", "良好", "軽量"),
     "medium": ModelSpec("medium", "Systran/faster-whisper-medium", "約1.5GB", "低速", "高", "高精度"),
     "large-v3": ModelSpec("large-v3", "Systran/faster-whisper-large-v3", "約3.1GB", "かなり低速", "最高", "最高精度"),
+    "tiny": ModelSpec("tiny", "Systran/faster-whisper-tiny", "約75MB", "最速", "低", "動作確認用"),
+    "base": ModelSpec("base", "Systran/faster-whisper-base", "約145MB", "高速", "やや低", "軽量"),
 }
 
-DEFAULT_MODEL = "small"
+DEFAULT_MODEL = "turbo"
 
 
 def default_model_dir() -> Path:

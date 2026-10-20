@@ -40,6 +40,7 @@ class TranscribeOptions:
     language: str = "ja"
     vad: bool = True
     beam_size: int = 5
+    compute_type: str = "int8"
     initial_prompt: Optional[str] = None
     model_dir: Optional[Path] = None
     cpu_threads: Optional[int] = None
@@ -81,13 +82,14 @@ def load_model(
     model_dir: Optional[Path] = None,
     progress_cb: Optional[ProgressCallback] = None,
     cpu_threads: Optional[int] = None,
+    compute_type: str = "int8",
 ):
     """モデルを（必要ならダウンロードして）読み込む。プロセス内でキャッシュする。"""
     from faster_whisper import WhisperModel
 
     spec = get_spec(model_name)
     threads = cpu_threads or os.cpu_count() or 4
-    cache_key = (spec.repo_id, threads)
+    cache_key = (spec.repo_id, threads, compute_type)
 
     with _model_lock:
         cached = _model_cache.get(cache_key)
@@ -111,7 +113,7 @@ def load_model(
     model = WhisperModel(
         local_path,
         device="cpu",
-        compute_type="int8",
+        compute_type=compute_type,
         cpu_threads=threads,
         num_workers=1,
     )
@@ -134,6 +136,13 @@ def transcribe_file(
     if not audio_path.is_file():
         raise FileNotFoundError(f"ファイルが見つかりません: {audio_path}")
 
+    spec = get_spec(options.model)
+    if options.diarize and not spec.supports_word_timestamps:
+        raise ValueError(
+            f"モデル「{options.model}」は単語タイムスタンプに未対応のため、話者分離と併用できません。"
+            "話者分離には turbo / small / medium / large-v3 を使ってください。"
+        )
+
     if on_progress is not None:
         on_progress(0.0, "モデルを準備中...")
     model = load_model(
@@ -141,6 +150,7 @@ def transcribe_file(
         model_dir=options.model_dir,
         progress_cb=on_progress,
         cpu_threads=options.cpu_threads,
+        compute_type=options.compute_type,
     )
 
     if cancel_event is not None and cancel_event.is_set():
