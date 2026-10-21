@@ -46,7 +46,7 @@ class TranscribeOptions:
     cpu_threads: Optional[int] = None
     diarize: bool = False
     num_speakers: int = -1
-    diarize_threshold: float = 0.5
+    diarize_threshold: Optional[float] = None
     diarize_embedding: str = DEFAULT_EMBEDDING
 
 

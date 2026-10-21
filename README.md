@@ -81,7 +81,7 @@ koemoji-gui.exe    # 配布版の場合
 
 1. 音声・動画ファイルを選択（Teams録画の mp4 もそのまま選べます）
 2. モデルを選択（迷ったら既定の `turbo` のまま。軽さ重視なら `small`）
-3. 会議なら「**話者分離**」にチェック（話者数が決まっていれば指定）
+3. 会議なら「**話者分離**」にチェック（話者数は通常「自動」。うまく分かれない場合だけ人数を指定）
 4. 「文字起こし開始」→ 完了後にコピー / 保存（txt・会話ログ・SRT・VTT）
 
 ### CLI
@@ -113,7 +113,7 @@ koemoji models --download turbo --download-diarization
 | `--diarize` | 話者分離を行う（会話ログ形式に） | オフ |
 | `--speakers` | 話者数が決まっている場合に指定 | `0`（自動） |
 | `--diarize-embedding` | 声紋モデル（`titanet` / `3dspeaker`） | `titanet` |
-| `--diarize-threshold` | 話者の分かれやすさ（0.3〜0.8 目安） | `0.5` |
+| `--diarize-threshold` | 声紋の距離しきい値を手動指定（通常は自動。指定時は小さいほど話者が増える） | 自動 |
 | `--no-vad` | 無音スキップを無効化 | VAD 有効 |
 | `--beam-size` | ビームサイズ（大きいほど丁寧・遅い） | `5` |
 | `--compute-type` | 計算精度（`int8` / `int8_float32` / `float32`）。精度重視なら `int8_float32` か `float32` | `int8` |
@@ -152,7 +152,7 @@ koemoji models --download turbo --download-diarization
 | **titanet** | 約40MB | NVIDIA TitaNet Small（標準） |
 | 3dspeaker | 約40MB | 3D-Speaker ERes2Net（アジア音声向け） |
 
-> 話者分離は音声の声紋から自動推定するため、100%正確ではありません。短い相づち、かぶせ話、声質の近い話者は苦手です。**うまく分かれない場合は `--diarize-threshold` を調整**（人数が多すぎる→大きく、少なすぎる→小さく）するか、`--speakers N` で人数を指定してください。
+> 話者分離は音声の声紋から自動推定するため、100%正確ではありません。短い相づち、かぶせ話、声質の近い話者は苦手です。通常は 3 秒ごとの声紋から話者数を自動推定します（長い会議でも、途中で話者が混ざりにくい方式です）。**うまく分かれない場合は `--speakers N` で人数を指定**してください。`--diarize-threshold` は距離しきい値を手動で固定したい上級者向けで、小さいほど人数が増えます。
 
 ## 対応ファイル形式
 

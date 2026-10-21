@@ -3,6 +3,9 @@
 VAD で発話区間を切り出し、sherpa-onnx の話者埋め込み（声紋）を抽出して
 クラスタリングし、「誰がいつ話したか」を推定する。Whisper の単語
 タイムスタンプと突き合わせて「話者1: ...」形式の会話ログを作れる。
+
+クラスタリングは 3 秒窓ごとの声紋に対して行い、話者数が未指定のときは
+凝集クラスタリングの分離度（シルエット係数）から自動推定する。
 """
 
 from __future__ import annotations
@@ -22,7 +25,11 @@ SAMPLE_RATE = 16000
 WINDOW_SECONDS = 3.0
 HOP_SECONDS = 1.5
 MAX_GAP_MERGE = 0.75
-LONG_REGION_SECONDS = 15.0
+MAX_AUTO_SPEAKERS = 8
+MIN_SPEAKER_DISTANCE = 0.35
+MIN_SILHOUETTE = 0.15
+MIN_CLUSTER_FRACTION = 0.03
+MAX_FIT_WINDOWS = 600
 
 _extractor_cache: Dict[Tuple[str, int], object] = {}
 _extractor_lock = threading.Lock()
@@ -129,35 +136,19 @@ def _embed(extractor, samples, start: float, end: float):
     return vector / norm
 
 
-def _region_embedding(extractor, samples, start: float, end: float):
-    import numpy as np
-
-    vectors = []
-    position = start
-    while position < end:
-        piece_end = min(position + WINDOW_SECONDS, end)
-        vector = _embed(extractor, samples, position, piece_end)
-        if vector is not None:
-            vectors.append(vector)
-        position = piece_end
-    if not vectors:
-        return None
-    mean = np.mean(np.stack(vectors), axis=0)
-    norm = float(np.linalg.norm(mean))
-    if norm <= 0:
-        return None
-    return mean / norm
-
-
-def _agglomerative_cluster(
+def _linkage(
     embeddings: Sequence,
-    threshold: float = 0.5,
-    num_clusters: int = -1,
-) -> List[int]:
+    target: Optional[int] = None,
+    threshold: Optional[float] = None,
+    snapshots_at: int = 0,
+    distances=None,
+) -> Tuple[List[int], List[float], Dict[int, List[int]]]:
     """平均リンケージ凝集クラスタリング（コサイン距離）。
 
-    threshold はコサイン距離（1 - 類似度）。小さいほど同じ話者にまとまりやすい。
-    num_clusters が正の値なら、距離に関係なくその数まで統合する。
+    target を指定するとそのクラスタ数で停止する。threshold を指定すると
+    統合距離が threshold を超えた時点で停止する。どちらも None なら
+    1 クラスタまで統合し、統合距離の履歴（昇順）を返す。
+    snapshots_at > 0 のとき、クラスタ数がその値以下の各段階のラベルを保存する。
     """
     import heapq
 
@@ -165,13 +156,17 @@ def _agglomerative_cluster(
 
     count = len(embeddings)
     if count == 0:
-        return []
+        return [], [], {}
     if count == 1:
-        return [0]
+        labels = [0]
+        return labels, [], {1: labels}
 
-    matrix = np.stack([np.asarray(e, dtype=np.float64) for e in embeddings])
-    distances = np.clip(1.0 - matrix @ matrix.T, 0.0, 2.0)
-    np.fill_diagonal(distances, 0.0)
+    if distances is None:
+        matrix = np.stack([np.asarray(e, dtype=np.float64) for e in embeddings])
+        distances = np.clip(1.0 - matrix @ matrix.T, 0.0, 2.0)
+        np.fill_diagonal(distances, 0.0)
+    else:
+        distances = np.array(distances, dtype=np.float64, copy=True)
 
     sizes = np.ones(count, dtype=np.float64)
     active = np.ones(count, dtype=bool)
@@ -181,18 +176,22 @@ def _agglomerative_cluster(
         for j in range(i + 1, count):
             heapq.heappush(heap, (float(distances[i, j]), i, j))
 
-    target = num_clusters if num_clusters > 0 else 1
+    heights: List[float] = []
+    snapshots: Dict[int, List[int]] = {}
     remaining = count
 
-    while remaining > target and heap:
+    while remaining > 1 and heap:
         distance, i, j = heapq.heappop(heap)
         if not (active[i] and active[j]):
             continue
         if abs(distance - float(distances[i, j])) > 1e-9:
             continue
-        if num_clusters <= 0 and distance > threshold:
+        if target is not None and remaining <= target:
+            break
+        if target is None and threshold is not None and distance > threshold:
             break
 
+        heights.append(distance)
         weight_i, weight_j = sizes[i], sizes[j]
         merged_row = (weight_i * distances[i] + weight_j * distances[j]) / (weight_i + weight_j)
         distances[i] = merged_row
@@ -209,14 +208,129 @@ def _agglomerative_cluster(
                 heapq.heappush(heap, (float(distances[a, b]), a, b))
         remaining -= 1
 
-    remap: Dict[int, int] = {}
+        if snapshots_at and remaining <= snapshots_at:
+            snapshots[remaining] = _remap(labels)
+
+    return _remap(labels), heights, snapshots
+
+
+def _remap(labels) -> List[int]:
+    mapping: Dict[int, int] = {}
     result: List[int] = []
     for value in labels:
         key = int(value)
-        if key not in remap:
-            remap[key] = len(remap)
-        result.append(remap[key])
+        if key not in mapping:
+            mapping[key] = len(mapping)
+        result.append(mapping[key])
     return result
+
+
+def _agglomerative_cluster(
+    embeddings: Sequence,
+    threshold: float = 0.5,
+    num_clusters: int = -1,
+) -> List[int]:
+    """平均リンケージ凝集クラスタリング（コサイン距離）。
+
+    threshold はコサイン距離（1 - 類似度）。小さいほど同じ話者にまとまりやすい。
+    num_clusters が正の値なら、距離に関係なくその数まで統合する。
+    """
+    if num_clusters > 0:
+        labels, _, _ = _linkage(embeddings, target=num_clusters)
+    else:
+        labels, _, _ = _linkage(embeddings, threshold=threshold)
+    return labels
+
+
+def _silhouette_score(labels: Sequence[int], distances) -> float:
+    """クラスタリングの分離度（シルエット係数、-1〜1）。"""
+    import numpy as np
+
+    labels_array = np.asarray([int(label) for label in labels])
+    unique = np.unique(labels_array)
+    if len(unique) < 2:
+        return -1.0
+    count = len(labels_array)
+    scores: List[float] = []
+    for index in range(count):
+        own = labels_array == labels_array[index]
+        own[index] = False
+        own_count = int(own.sum())
+        if own_count == 0:
+            scores.append(0.0)
+            continue
+        inside = float(distances[index, own].mean())
+        outside = float("inf")
+        for label in unique:
+            if label == labels_array[index]:
+                continue
+            other = labels_array == label
+            if other.any():
+                outside = min(outside, float(distances[index, other].mean()))
+        if outside == float("inf"):
+            scores.append(0.0)
+        else:
+            scores.append((outside - inside) / max(inside, outside, 1e-12))
+    return float(np.mean(scores))
+
+
+def _cluster_embeddings(
+    embeddings: Sequence,
+    num_speakers: int = -1,
+    threshold: Optional[float] = None,
+) -> List[int]:
+    """声紋をクラスタリングしてラベルを返す。
+
+    num_speakers が正なら人数を固定。threshold 指定時は距離しきい値で分割。
+    どちらも未指定なら分離度が最大になる人数を自動推定する。
+    """
+    count = len(embeddings)
+    if count == 0:
+        return []
+    if count == 1:
+        return [0]
+    if num_speakers > 0:
+        return _agglomerative_cluster(embeddings, num_clusters=num_speakers)
+    if threshold is not None:
+        return _agglomerative_cluster(embeddings, threshold=threshold)
+
+    import numpy as np
+
+    matrix = np.stack([np.asarray(e, dtype=np.float64) for e in embeddings])
+    distances = np.clip(1.0 - matrix @ matrix.T, 0.0, 2.0)
+    np.fill_diagonal(distances, 0.0)
+    _, heights, snapshots = _linkage(
+        embeddings, snapshots_at=MAX_AUTO_SPEAKERS, distances=distances
+    )
+
+    min_size = max(2, int(np.ceil(count * MIN_CLUSTER_FRACTION)))
+    best_labels: Optional[List[int]] = None
+    best_score = -1.0
+    for k in range(2, min(MAX_AUTO_SPEAKERS, count) + 1):
+        if float(heights[count - k]) < MIN_SPEAKER_DISTANCE:
+            break
+        labels = snapshots.get(k)
+        if labels is None:
+            continue
+        labels_array = np.asarray(labels)
+        sizes = np.bincount(labels_array)
+        core = [label for label in range(len(sizes)) if sizes[label] >= min_size]
+        if len(core) < 2:
+            continue
+        centroids = np.stack(
+            [matrix[labels_array == label].mean(axis=0) for label in core]
+        )
+        centroids = centroids / np.maximum(
+            np.linalg.norm(centroids, axis=1, keepdims=True), 1e-12
+        )
+        effective = _remap((matrix @ centroids.T).argmax(axis=1).tolist())
+        score = _silhouette_score(effective, distances)
+        if score > best_score + 0.02:
+            best_score = score
+            best_labels = effective
+    if best_labels is None or best_score < MIN_SILHOUETTE:
+        return [0] * count
+    return best_labels
 
 
 def _build_spans(
@@ -228,14 +342,38 @@ def _build_spans(
             spans[-1].end = max(spans[-1].end, end)
         else:
             spans.append(SpeakerSpan(start, end, speaker))
-    return spans
+
+    # 3秒窓は 1.5 秒ずつ重なるため、話者の変わり目は重なりの中央で切る。
+    for previous, current in zip(spans, spans[1:]):
+        if previous.end > current.start:
+            boundary = (previous.end + current.start) / 2.0
+            previous.end = boundary
+            current.start = boundary
+    return [span for span in spans if span.end - span.start > 0.05]
+
+
+def _smooth_labels(
+    windows: Sequence[Tuple[float, float, object]],
+    labels: Sequence[int],
+) -> List[int]:
+    """孤立した 1 窓だけのラベルを前後に合わせる（時間方向の平滑化）。"""
+    smoothed = list(labels)
+    for i in range(1, len(labels) - 1):
+        if labels[i] == labels[i - 1] or labels[i] == labels[i + 1]:
+            continue
+        if labels[i - 1] != labels[i + 1]:
+            continue
+        if windows[i + 1][0] - windows[i][0] > WINDOW_SECONDS:
+            continue
+        smoothed[i] = labels[i - 1]
+    return smoothed
 
 
 def diarize(
     audio_path: Path,
     embedding: str = DEFAULT_EMBEDDING,
     num_speakers: int = -1,
-    threshold: float = 0.5,
+    threshold: Optional[float] = None,
     model_dir: Optional[Path] = None,
     cpu_threads: Optional[int] = None,
     on_progress: Optional[ProgressCallback] = None,
@@ -264,73 +402,57 @@ def diarize(
             on_progress(1.0, "発話区間が見つかりませんでした")
         return []
 
-    # 長すぎる区間は分割（区間内の話者変化を拾いやすくする）
-    split_regions: List[Tuple[float, float]] = []
-    for start, end in regions:
-        if end - start <= LONG_REGION_SECONDS:
-            split_regions.append((start, end))
-            continue
-        position = start
-        while position < end:
-            piece_end = min(position + LONG_REGION_SECONDS, end)
-            split_regions.append((position, piece_end))
-            position = piece_end
-
-    region_embeddings = []
-    for index, (start, end) in enumerate(split_regions):
+    windows: List[Tuple[float, float, object]] = []
+    for index, (start, end) in enumerate(regions):
         if _cancelled():
             return []
-        vector = _region_embedding(extractor, samples, start, end)
-        region_embeddings.append(vector)
-        if on_progress is not None and len(split_regions) > 0:
-            frac = 0.1 + 0.55 * (index + 1) / len(split_regions)
+        for window_start, window_end in _windows_for_region(start, end):
+            vector = _embed(extractor, samples, window_start, window_end)
+            if vector is not None:
+                windows.append((window_start, window_end, vector))
+        if on_progress is not None and regions:
+            frac = 0.1 + 0.55 * (index + 1) / len(regions)
             on_progress(frac, f"声紋を抽出中... {frac * 100:.0f}%")
 
-    valid = [(region, vector) for region, vector in zip(split_regions, region_embeddings) if vector is not None]
-    if not valid:
+    if not windows:
         return []
-    regions_valid = [region for region, _ in valid]
-    vectors = [vector for _, vector in valid]
 
     if on_progress is not None:
         on_progress(0.7, "話者をクラスタリング中...")
-    labels = _agglomerative_cluster(vectors, threshold=threshold, num_clusters=num_speakers)
+
+    vectors = [window[2] for window in windows]
+    if len(vectors) > MAX_FIT_WINDOWS:
+        stride = (len(vectors) + MAX_FIT_WINDOWS - 1) // MAX_FIT_WINDOWS
+        fit_vectors = vectors[::stride]
+    else:
+        fit_vectors = vectors
+
+    fit_labels = _cluster_embeddings(fit_vectors, num_speakers, threshold)
+    cluster_count = len(set(fit_labels))
 
     centroids: Dict[int, object] = {}
-    for label, vector in zip(labels, vectors):
+    for label, vector in zip(fit_labels, fit_vectors):
         if label not in centroids:
-            centroids[label] = vector.copy()
+            centroids[label] = np.array(vector, dtype=np.float64)
         else:
             centroids[label] = centroids[label] + vector
+    centroid_keys = sorted(centroids)
+    centroid_matrix = np.stack(
+        [centroids[key] / max(float(np.linalg.norm(centroids[key])), 1e-12) for key in centroid_keys]
+    )
 
-    # 長い区間は 3 秒窓ごとに最も近い話者へ割り当てる
+    if cluster_count <= 1:
+        labels = [0] * len(vectors)
+    else:
+        matrix = np.stack([np.asarray(vector, dtype=np.float64) for vector in vectors])
+        similarities = matrix @ centroid_matrix.T
+        labels = [centroid_keys[int(index)] for index in similarities.argmax(axis=1)]
+        labels = _remap(labels)
+        labels = _smooth_labels(windows, labels)
+
     if on_progress is not None:
-        on_progress(0.8, "発話ごとに話者を割り当て中...")
-    labeled: List[Tuple[float, float, int]] = []
-    for (start, end), label in zip(regions_valid, labels):
-        windows = _windows_for_region(start, end)
-        if len(windows) == 1:
-            labeled.append((start, end, label))
-            continue
-        for window_start, window_end in windows:
-            if _cancelled():
-                return []
-            vector = _embed(extractor, samples, window_start, window_end)
-            if vector is None:
-                labeled.append((window_start, window_end, label))
-                continue
-            best_label = label
-            best_similarity = None
-            for candidate, centroid in centroids.items():
-                centroid_norm = float(np.linalg.norm(centroid))
-                if centroid_norm <= 0:
-                    continue
-                similarity = float(vector @ (centroid / centroid_norm))
-                if best_similarity is None or similarity > best_similarity:
-                    best_similarity = similarity
-                    best_label = candidate
-            labeled.append((window_start, window_end, best_label))
-
+        on_progress(0.85, "発話ごとに話者を割り当て中...")
+    labeled = [(window[0], window[1], label) for window, label in zip(windows, labels)]
     spans = _build_spans(labeled)
     if on_progress is not None:
         on_progress(1.0, "話者分離が完了しました")

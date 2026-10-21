@@ -7,6 +7,8 @@ from koemoji.diarization import (
     SpeakerSpan,
     _agglomerative_cluster,
     _build_spans,
+    _cluster_embeddings,
+    _silhouette_score,
     _windows_for_region,
     attribute_segments,
     merge_words_with_speakers,
@@ -126,6 +128,75 @@ def test_cluster_forced_count():
 def test_cluster_empty_and_single():
     assert _agglomerative_cluster([], threshold=0.5) == []
     assert _agglomerative_cluster([_unit([1.0, 0.0])], threshold=0.5) == [0]
+
+
+def test_auto_cluster_detects_two_separated_groups():
+    a = _unit([1.0, 0.0, 0.0])
+    b = _unit([0.95, 0.05, 0.0])
+    c = _unit([0.0, 1.0, 0.0])
+    d = _unit([0.05, 0.95, 0.0])
+    labels = _cluster_embeddings([a, b, c, d])
+    assert labels[0] == labels[1]
+    assert labels[2] == labels[3]
+    assert labels[0] != labels[2]
+
+
+def test_auto_cluster_keeps_single_speaker_together():
+    vectors = [_unit([1.0, 0.01 * index, 0.0]) for index in range(8)]
+    labels = _cluster_embeddings(vectors)
+    assert len(set(labels)) == 1
+
+
+def test_auto_cluster_detects_three_groups():
+    vectors = []
+    for axis in range(3):
+        for offset in (0.0, 0.01, -0.01):
+            vector = [0.0, 0.0, 0.0]
+            vector[axis] = 1.0
+            vector[(axis + 1) % 3] = offset
+            vectors.append(_unit(vector))
+    labels = _cluster_embeddings(vectors)
+    assert len(set(labels)) == 3
+    for group in range(3):
+        assert len({labels[index] for index in range(group * 3, group * 3 + 3)}) == 1
+
+
+def test_auto_cluster_ignores_single_window_outlier():
+    a = _unit([1.0, 0.0, 0.0])
+    b = _unit([0.0, 1.0, 0.0])
+    outlier = _unit([0.0, 0.0, 1.0])
+    labels = _cluster_embeddings([a, a, a, b, b, b, outlier])
+    assert len(set(labels)) == 2
+    assert labels[-1] in (0, 1)
+
+
+def test_auto_cluster_rejects_same_speaker_different_sentences():
+    first = _unit([1.0, 0.0, 0.0])
+    second = _unit([0.7, 0.714, 0.0])
+    labels = _cluster_embeddings([first, first, second, second])
+    assert len(set(labels)) == 1
+
+
+def test_silhouette_prefers_separated_clusters():
+    distances = np.array(
+        [
+            [0.0, 0.1, 0.9, 0.9],
+            [0.1, 0.0, 0.9, 0.9],
+            [0.9, 0.9, 0.0, 0.1],
+            [0.9, 0.9, 0.1, 0.0],
+        ]
+    )
+    assert _silhouette_score([0, 0, 1, 1], distances) > 0.8
+    assert _silhouette_score([0, 1, 0, 1], distances) < 0.0
+
+
+def test_manual_threshold_overrides_auto():
+    a = _unit([1.0, 0.0, 0.0])
+    b = _unit([0.9, 0.1, 0.0])
+    c = _unit([0.0, 1.0, 0.0])
+    labels = _cluster_embeddings([a, b, c], threshold=0.5)
+    assert labels[0] == labels[1]
+    assert labels[0] != labels[2]
 
 
 def test_windows_for_short_region():

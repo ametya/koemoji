@@ -1,4 +1,4 @@
-# Windows 用配布ビルドスクリプト（CPU前提・追加環境不要の zip を作る）
+﻿# Windows 用配布ビルドスクリプト（CPU前提・追加環境不要の zip を作る）
 # 使い方:  powershell -ExecutionPolicy Bypass -File scripts\build_win.ps1
 #requires -Version 5.1
 
@@ -10,12 +10,16 @@ try {
     if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
         $launcher = Get-Command py -ErrorAction SilentlyContinue
         if ($launcher) {
-            & py -3.13 -m venv .venv-build 2>$null
+            & cmd /c "py -3.12 -m venv .venv-build 2>nul"
             if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
-                & py -3.12 -m venv .venv-build
+                & cmd /c "py -3.13 -m venv .venv-build 2>nul"
             }
-        } else {
-            python -m venv .venv-build
+            if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
+                & cmd /c "py -3.14 -m venv .venv-build 2>nul"
+            }
+        }
+        if (-not (Test-Path ".venv-build\Scripts\python.exe")) {
+            & python -m venv .venv-build
         }
     }
     $python = Join-Path $root ".venv-build\Scripts\python.exe"

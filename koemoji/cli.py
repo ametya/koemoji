@@ -101,8 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"声紋モデル（既定: {DEFAULT_EMBEDDING}）",
     )
     p_tr.add_argument(
-        "--diarize-threshold", type=float, default=0.5,
-        help="話者の分かれやすさ（0.3〜0.8 目安。小さいほど人数が減り、大きいほど増える）",
+        "--diarize-threshold", type=float, default=None,
+        help="声紋の距離しきい値を手動指定（通常は自動で話者数を推定。指定時は小さいほど人数が増える）",
     )
     p_tr.add_argument("-q", "--quiet", action="store_true", help="進捗表示を抑制")
 
