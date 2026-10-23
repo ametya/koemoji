@@ -16,6 +16,7 @@ from .core import (
     TranscribeResult,
     transcribe_file,
 )
+from .glossary import load_glossary
 from .models import DEFAULT_MODEL, MODEL_CATALOG, get_spec
 
 APP_TITLE = f"声文字 (koemoji) v{__version__}"
@@ -101,6 +102,15 @@ class App:
             side="left", fill="x", expand=True, padx=6
         )
 
+        glossary_row = ttk.Frame(outer)
+        glossary_row.pack(fill="x", pady=4)
+        ttk.Label(glossary_row, text="用語集（任意・固有名詞/誤認識の置換）:").pack(side="left")
+        self.glossary_var = tk.StringVar()
+        ttk.Entry(glossary_row, textvariable=self.glossary_var).pack(
+            side="left", fill="x", expand=True, padx=6
+        )
+        ttk.Button(glossary_row, text="参照...", command=self._choose_glossary).pack(side="left")
+
         btn_row = ttk.Frame(outer)
         btn_row.pack(fill="x", pady=8)
         self.start_btn = ttk.Button(btn_row, text="文字起こし開始", command=self._start)
@@ -137,6 +147,17 @@ class App:
         if path:
             self.file_var.set(path)
 
+    def _choose_glossary(self) -> None:
+        path = filedialog.askopenfilename(
+            title="用語集ファイルを選択",
+            filetypes=[
+                ("用語集 (*.txt *.tsv)", "*.txt *.tsv"),
+                ("すべてのファイル", "*.*"),
+            ],
+        )
+        if path:
+            self.glossary_var.set(path)
+
     def _selected_model(self) -> str:
         label = self.model_var.get()
         for key in self.model_keys:
@@ -156,13 +177,6 @@ class App:
             messagebox.showerror(APP_TITLE, f"ファイルが見つかりません:\n{path}")
             return
 
-        self.cancel_event.clear()
-        self.result = None
-        self.text.delete("1.0", "end")
-        self.progress["value"] = 0
-        self._set_busy(True)
-        self.status_var.set("準備中...")
-
         speakers_raw = self.speakers_var.get()
         num_speakers = int(speakers_raw) if speakers_raw.isdigit() else -1
         model_key = self._selected_model()
@@ -175,6 +189,15 @@ class App:
             )
             return
 
+        glossary = None
+        glossary_raw = self.glossary_var.get().strip().strip('"')
+        if glossary_raw:
+            try:
+                glossary = load_glossary(Path(glossary_raw))
+            except Exception as exc:
+                messagebox.showerror(APP_TITLE, f"用語集を読み込めません:\n{exc}")
+                return
+
         options = TranscribeOptions(
             model=model_key,
             language="ja",
@@ -182,7 +205,15 @@ class App:
             initial_prompt=self.prompt_var.get().strip() or None,
             diarize=self.diarize_var.get(),
             num_speakers=num_speakers,
+            glossary=glossary,
         )
+
+        self.cancel_event.clear()
+        self.result = None
+        self.text.delete("1.0", "end")
+        self.progress["value"] = 0
+        self._set_busy(True)
+        self.status_var.set("準備中...")
 
         def _run() -> None:
             try:

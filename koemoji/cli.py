@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from . import __version__
 from .core import FORMATS, TranscribeCancelled, TranscribeOptions, transcribe_file
+from .glossary import load_glossary
 from .models import (
     DEFAULT_EMBEDDING,
     DEFAULT_MODEL,
@@ -85,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--initial-prompt", default=None,
         help="認識を誘導するヒント文（例: 「株式会社ほげ、プロジェクトふが」）",
     )
+    p_tr.add_argument(
+        "--glossary", default=None,
+        help="用語集ファイル（固有名詞のヒントと誤認識の置換。UTF-8 / Shift_JIS）",
+    )
     p_tr.add_argument("--formats", default="txt", help="出力形式。txt,srt,vtt,log をカンマ区切り（既定: txt）")
     p_tr.add_argument("--model-dir", default=None, help="モデル保存先ディレクトリ")
     p_tr.add_argument("--cpu-threads", type=int, default=None, help="使用CPUスレッド数（既定: 自動）")
@@ -132,8 +137,23 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         print(f"エラー: 未対応の出力形式です: {', '.join(unknown)}（対応: {', '.join(FORMATS)}）")
         return 2
 
+    glossary = None
+    if args.glossary:
+        try:
+            glossary = load_glossary(Path(args.glossary))
+        except Exception as exc:
+            print(f"エラー: 用語集を読み込めません: {exc}")
+            return 2
+
     model_dir = Path(args.model_dir) if args.model_dir else None
     print(f"モデル: {args.model} / 言語: {args.language} / 出力形式: {', '.join(formats)}")
+    if glossary is not None and not glossary.is_empty:
+        parts = []
+        if glossary.terms:
+            parts.append(f"用語 {len(glossary.terms)}件")
+        if glossary.replacements:
+            parts.append(f"置換 {len(glossary.replacements)}件")
+        print(f"用語集: {' / '.join(parts)}")
     exit_code = 0
 
     for raw in args.inputs:
@@ -157,6 +177,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             num_speakers=args.speakers if args.speakers > 0 else -1,
             diarize_threshold=args.diarize_threshold,
             diarize_embedding=args.diarize_embedding,
+            glossary=glossary,
         )
         try:
             result = transcribe_file(path, options, on_progress=_progress_printer(args.quiet))

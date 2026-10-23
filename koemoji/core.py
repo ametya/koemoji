@@ -7,9 +7,12 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 from .models import DEFAULT_EMBEDDING, DEFAULT_MODEL, default_model_dir, ensure_model, get_spec
+
+if TYPE_CHECKING:
+    from .glossary import Glossary
 
 # frac (0.0-1.0), message
 ProgressCallback = Callable[[float, str], None]
@@ -48,6 +51,7 @@ class TranscribeOptions:
     num_speakers: int = -1
     diarize_threshold: Optional[float] = None
     diarize_embedding: str = DEFAULT_EMBEDDING
+    glossary: Optional["Glossary"] = None
 
 
 @dataclass
@@ -157,6 +161,9 @@ def transcribe_file(
         raise TranscribeCancelled()
 
     language = None if options.language in (None, "", "auto") else options.language
+    initial_prompt = options.initial_prompt
+    if options.glossary is not None:
+        initial_prompt = options.glossary.build_prompt(initial_prompt)
     if on_progress is not None:
         on_progress(0.0, "音声を解析中...")
 
@@ -167,7 +174,7 @@ def transcribe_file(
         beam_size=options.beam_size,
         vad_filter=options.vad,
         vad_parameters={"min_silence_duration_ms": 500} if options.vad else None,
-        initial_prompt=options.initial_prompt,
+        initial_prompt=initial_prompt,
         condition_on_previous_text=False,
         word_timestamps=options.diarize,
     )
@@ -217,6 +224,10 @@ def transcribe_file(
         if merged:
             segments = merged
             num_speakers = len({seg.speaker for seg in segments if seg.speaker is not None})
+
+    if options.glossary is not None and not options.glossary.is_empty:
+        for segment in segments:
+            segment.text = options.glossary.apply(segment.text)
 
     elapsed = time.perf_counter() - started
     if on_progress is not None:
