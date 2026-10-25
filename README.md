@@ -124,6 +124,11 @@ koemoji models --download turbo --download-diarization
 | `--compute-type` | 計算精度（`int8` / `int8_float32` / `float32`）。精度重視なら `int8_float32` か `float32` | `int8` |
 | `--initial-prompt` | 固有名詞などのヒント文 | なし |
 | `--glossary` | 用語集ファイル（ヒント追加＋誤認識の置換） | なし |
+| `--hotwords` | 強調したい語をカンマ区切りで指定（`--initial-prompt` / `--glossary` と併用時は無視） | なし |
+| `--temperature` | サンプリング温度（`0` で決定論的。未指定は faster-whisper の既定段階） | なし |
+| `--line-chars` | 会話ログ1行の最大文字数（`0` で再分割しない。句読点・助詞の位置で自然に折る） | `32` |
+| `--no-resegment` | 長文の自動折り返しを行わない | 折り返し有効 |
+| `--keep-hallucinations` | 無音区間の幻覚（`ご視聴ありがとうございました` 等）の自動除去を無効化 | 除去有効 |
 | `--cpu-threads` | 使用スレッド数 | 自動（全コア） |
 | `-q, --quiet` | 進捗表示を抑制 | - |
 
