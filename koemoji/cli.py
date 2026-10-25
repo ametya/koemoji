@@ -109,6 +109,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--diarize-threshold", type=float, default=None,
         help="声紋の距離しきい値を手動指定（通常は自動で話者数を推定。指定時は小さいほど人数が増える）",
     )
+    p_tr.add_argument(
+        "--hotwords", default=None,
+        help="ホットワード（空白区切り）。※--initial-prompt / --glossary と併用すると無視される（faster-whisper の仕様）",
+    )
+    p_tr.add_argument(
+        "--temperature", type=float, default=None,
+        help="サンプリング温度。0 で決定的、未指定で faster-whisper 既定のフォールバック列",
+    )
+    p_tr.add_argument(
+        "--line-chars", type=int, default=32,
+        help="出力1行の目安文字数（0 で再構成しない。既定: 32）",
+    )
+    p_tr.add_argument(
+        "--no-resegment", action="store_true",
+        help="Whisper のセグメントをそのまま使う（行の結合・分割をしない）",
+    )
+    p_tr.add_argument(
+        "--keep-hallucinations", action="store_true",
+        help="無音区間の幻覚とみなしたセグメントを削除しない",
+    )
     p_tr.add_argument("-q", "--quiet", action="store_true", help="進捗表示を抑制")
 
     sub.add_parser("gui", help="GUI を起動する")
@@ -178,6 +198,11 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             diarize_threshold=args.diarize_threshold,
             diarize_embedding=args.diarize_embedding,
             glossary=glossary,
+            hotwords=args.hotwords,
+            temperature=args.temperature,
+            drop_hallucinations=not args.keep_hallucinations,
+            resegment=not args.no_resegment,
+            max_line_chars=args.line_chars,
         )
         try:
             result = transcribe_file(path, options, on_progress=_progress_printer(args.quiet))
