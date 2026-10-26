@@ -52,6 +52,7 @@ class TranscribeOptions:
     diarize_threshold: Optional[float] = None
     diarize_embedding: str = DEFAULT_EMBEDDING
     glossary: Optional["Glossary"] = None
+    glossary_prompt: bool = True
     hotwords: Optional[str] = None
     temperature: Optional[float] = None
     drop_hallucinations: bool = True
@@ -169,7 +170,7 @@ def transcribe_file(
 
     language = None if options.language in (None, "", "auto") else options.language
     initial_prompt = options.initial_prompt
-    if options.glossary is not None:
+    if options.glossary is not None and options.glossary_prompt:
         initial_prompt = options.glossary.build_prompt(initial_prompt)
     if on_progress is not None:
         on_progress(0.0, "音声を解析中...")
@@ -404,6 +405,81 @@ def _split_long_segment(seg: Segment, max_chars: int) -> List[Segment]:
     return out
 
 
+_FRAGMENT_MAX_CHARS = 4
+"""この字数以下の「文末記号なし」断片は語の途中で切れた切れ端とみなす。"""
+
+def _is_tail_fragment(text: str) -> bool:
+    """語の途中で切れた後ろ半分かどうか（「電」「再」「ドク」など）。
+
+    文末記号で終わらず、かつ極端に短いものだけを対象にする。
+    「はい」「そう」のような短い相づちは直前の行に飲み込まれても
+    大きな害はないが、行頭の「はい」を吸い上げるのは避けたいので
+    判定は「直前の行の末尾」にだけ適用する。
+    """
+    body = text.strip()
+    if not body or body.endswith(_SENTENCE_END):
+        return False
+    return len(body) <= _FRAGMENT_MAX_CHARS
+
+_WORD_JOIN_GAP = 3.0
+"""行末が漢字で終わる「語の途中切れ」を跨いで連結してよい無音の長さ（秒）。"""
+
+_KANJI_RANGES = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x3005, 0x3005))
+
+def _is_kanji(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in _KANJI_RANGES)
+
+def _ends_mid_word(text: str) -> bool:
+    """行末が語の途中で切れている疑いが強いか（文末記号も助詞もなく漢字で終わる）。
+
+    日本語の文は助詞・活用語尾（ひらがな）で終わることがほとんどなので、
+    漢字で終わる行は語の途中で切れた可能性が高い。
+    """
+    body = text.strip()
+    if not body or body.endswith(_SENTENCE_END):
+        return False
+    return _is_kanji(body[-1])
+
+def _smoothe_speaker_islands(segments: List[Segment]) -> List[Segment]:
+    """語の途中で切れた 1 行だけの「切れ端」を、前後の話者に吸収させる。
+
+    話者分離は 3 秒窓の多数決なので、語の途中で 1 行だけ話者が入れ替わり、
+    そのせいで「再」「度ちょっと」「電」「話に連」のように分断されることがある。
+    前後が同じ話者ならそこへ、違う場合は連続している側（長い方）へ寄せる。
+    """
+    if len(segments) < 3:
+        return segments
+    total = len(segments)
+    for i in range(1, total - 1):
+        cur = segments[i]
+        if not _is_tail_fragment(cur.text):
+            continue
+        prev_sp = segments[i - 1].speaker
+        next_sp = segments[i + 1].speaker
+        if cur.speaker != prev_sp and prev_sp == next_sp:
+            cur.speaker = prev_sp
+            continue
+        if prev_sp == next_sp:
+            continue
+        behind = _run_length(segments, i - 1, -1)
+        ahead = _run_length(segments, i + 1, 1)
+        if cur.speaker != next_sp and ahead >= 2 and ahead > behind:
+            cur.speaker = next_sp
+        elif cur.speaker != prev_sp and behind >= 2 and behind > ahead:
+            cur.speaker = prev_sp
+    return segments
+
+def _run_length(segments: List[Segment], index: int, step: int) -> int:
+    """index から step 方向に同じ話者が何行続くか。"""
+    speaker = segments[index].speaker
+    count = 0
+    i = index
+    while 0 <= i < len(segments) and segments[i].speaker == speaker:
+        count += 1
+        i += step
+    return count
+
 def resegment(
     segments: List[Segment],
     max_chars: int = 32,
@@ -425,16 +501,25 @@ def resegment(
     for seg in segments:
         pieces.extend(_split_long_segment(seg, max_chars))
 
+    pieces = _smoothe_speaker_islands(pieces)
+
     merged: List[Segment] = []
     for seg in pieces:
         if merged:
             last = merged[-1]
             gap = seg.start - last.end
             joinable = (
-                last.speaker == seg.speaker
-                and gap <= gap_split
-                and len(last.text) + len(seg.text) <= max_chars
+                len(last.text) + len(seg.text) <= max_chars
                 and not last.text.endswith(_SENTENCE_END)
+                and (
+                    (
+                        last.speaker == seg.speaker
+                        and (gap <= gap_split or _is_tail_fragment(last.text))
+                    )
+                    # 語の途中で切れている境界は「本当の区切り」ではない。
+                    # 話者が違って見えるのは窓の多数決が外れただけなので連結を優先する。
+                    or (gap <= _WORD_JOIN_GAP and _ends_mid_word(last.text))
+                )
             )
             if joinable:
                 last.text = last.text + joiner + seg.text

@@ -90,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--glossary", default=None,
         help="用語集ファイル（固有名詞のヒントと誤認識の置換。UTF-8 / Shift_JIS）",
     )
+    p_tr.add_argument(
+        "--no-glossary-prompt", action="store_true",
+        help="用語集を initial_prompt に混ぜない（誤認識の置換だけを行う）",
+    )
     p_tr.add_argument("--formats", default="txt", help="出力形式。txt,srt,vtt,log をカンマ区切り（既定: txt）")
     p_tr.add_argument("--model-dir", default=None, help="モデル保存先ディレクトリ")
     p_tr.add_argument("--cpu-threads", type=int, default=None, help="使用CPUスレッド数（既定: 自動）")
@@ -173,7 +177,8 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             parts.append(f"用語 {len(glossary.terms)}件")
         if glossary.replacements:
             parts.append(f"置換 {len(glossary.replacements)}件")
-        print(f"用語集: {' / '.join(parts)}")
+        suffix = "（ヒント文には使いません）" if args.no_glossary_prompt else ""
+        print(f"用語集: {' / '.join(parts)}{suffix}")
     exit_code = 0
 
     for raw in args.inputs:
@@ -198,6 +203,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             diarize_threshold=args.diarize_threshold,
             diarize_embedding=args.diarize_embedding,
             glossary=glossary,
+            glossary_prompt=not args.no_glossary_prompt,
             hotwords=args.hotwords,
             temperature=args.temperature,
             drop_hallucinations=not args.keep_hallucinations,

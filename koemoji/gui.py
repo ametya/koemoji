@@ -111,6 +111,12 @@ class App:
         )
         ttk.Button(glossary_row, text="参照...", command=self._choose_glossary).pack(side="left")
 
+        self.glossary_prompt_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            outer, text="用語集をヒント文としても使う（狭帯域の音声ではオフ推奨）",
+            variable=self.glossary_prompt_var,
+        ).pack(anchor="w", padx=2)
+
         btn_row = ttk.Frame(outer)
         btn_row.pack(fill="x", pady=8)
         self.start_btn = ttk.Button(btn_row, text="文字起こし開始", command=self._start)
@@ -206,6 +212,7 @@ class App:
             diarize=self.diarize_var.get(),
             num_speakers=num_speakers,
             glossary=glossary,
+            glossary_prompt=self.glossary_prompt_var.get(),
         )
 
         self.cancel_event.clear()

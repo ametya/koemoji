@@ -87,3 +87,40 @@ def test_hallucinations_kept_when_disabled(fake):
     model.transcribe = transcribe
     result = transcribe_file(audio, TranscribeOptions(drop_hallucinations=False))
     assert len(result.segments) == 1
+
+
+def test_glossary_prompt_injected_by_default(fake, tmp_path):
+    from koemoji.glossary import load_glossary
+
+    model, audio = fake
+    g = tmp_path / "g.txt"
+    g.write_text("ファーミン => ファーミング\n", encoding="utf-8")
+    transcribe_file(audio, TranscribeOptions(glossary=load_glossary(g)))
+    assert "ファーミング" in (model.kwargs["initial_prompt"] or "")
+
+
+def test_glossary_prompt_can_be_disabled(fake, tmp_path):
+    from koemoji.glossary import load_glossary
+
+    model, audio = fake
+    g = tmp_path / "g.txt"
+    g.write_text("ファーミン => ファーミング\n", encoding="utf-8")
+    result = transcribe_file(
+        audio, TranscribeOptions(glossary=load_glossary(g), glossary_prompt=False)
+    )
+    assert model.kwargs["initial_prompt"] is None
+    # 置換だけは効く
+    assert result is not None
+
+
+def test_glossary_replacement_still_applied_without_prompt(fake, tmp_path):
+    from koemoji.glossary import load_glossary
+
+    model, audio = fake
+    model.transcribe = lambda path, **kw: ([_Seg(0.0, 1.0, "ファーミンです。")], _Info())
+    g = tmp_path / "g.txt"
+    g.write_text("ファーミン => ファーミング\n", encoding="utf-8")
+    result = transcribe_file(
+        audio, TranscribeOptions(glossary=load_glossary(g), glossary_prompt=False)
+    )
+    assert "ファーミング" in result.segments[0].text
