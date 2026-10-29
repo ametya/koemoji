@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "koemoji"
-version = "0.1.5"
+version = "0.1.6"
 description = "CPUだけで動くオフライン日本語文字起こしツール（faster-whisper / Windows・macOS・Linux対応）"
 readme = "README.md"
 requires-python = ">=3.10"

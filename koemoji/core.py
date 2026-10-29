@@ -415,6 +415,8 @@ def _is_tail_fragment(text: str) -> bool:
     「はい」「そう」のような短い相づちは直前の行に飲み込まれても
     大きな害はないが、行頭の「はい」を吸い上げるのは避けたいので
     判定は「直前の行の末尾」にだけ適用する。
+    ひらがなで終わる切れ端を連結するときは、無音が _WORD_JOIN_GAP 秒以下である
+    ことも要求する（漢字終わりは語の途中切れがほぼ確実なので対象外）。
     """
     body = text.strip()
     if not body or body.endswith(_SENTENCE_END):
@@ -422,7 +424,11 @@ def _is_tail_fragment(text: str) -> bool:
     return len(body) <= _FRAGMENT_MAX_CHARS
 
 _WORD_JOIN_GAP = 3.0
-"""行末が漢字で終わる「語の途中切れ」を跨いで連結してよい無音の長さ（秒）。"""
+"""語の途中切れを跨いで連結してよい無音の長さの上限（秒）。
+
+漢字で終わる行だけでなく、4 文字以下のひらがな切れ端（「なるほど」など）を
+救済する場合にもこの上限を課す。3 秒を超える間隔は別の話題・別の相づちとみなす。
+"""
 
 _KANJI_RANGES = ((0x4E00, 0x9FFF), (0x3400, 0x4DBF), (0x3005, 0x3005))
 
@@ -491,6 +497,9 @@ def resegment(
     Whisper は息継ぎで切る／切らないの振幅が大きく、1行が100文字を超えたり
     数文字で切れたりする。ここでは「同じ話者・無音が gap_split 秒未満・文末でない・
     連結しても max_chars 以内」のときだけ連結し、長すぎる行は句読点で割る。
+    ただし 4 文字以下の切れ端は、漢字で終わるもの（語の途中切れがほぼ確実）なら
+    無音の長さに関係なく連結し、ひらがなで終わるもの（相づちの可能性がある）は
+    _WORD_JOIN_GAP 秒までに限って連結する。
     """
     if not segments or max_chars <= 0:
         return segments
@@ -514,7 +523,15 @@ def resegment(
                 and (
                     (
                         last.speaker == seg.speaker
-                        and (gap <= gap_split or _is_tail_fragment(last.text))
+                        and (
+                            gap <= gap_split
+                            or (
+                                _is_tail_fragment(last.text)
+                                # 漢字で終わる切れ端（「再」「ドク」）は語の途中切れが
+                                # ほぼ確実なので、無音が長くても連結してよい。
+                                and (gap <= _WORD_JOIN_GAP or _ends_mid_word(last.text))
+                            )
+                        )
                     )
                     # 語の途中で切れている境界は「本当の区切り」ではない。
                     # 話者が違って見えるのは窓の多数決が外れただけなので連結を優先する。
