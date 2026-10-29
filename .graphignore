@@ -1,0 +1,13 @@
+# entire-graph の索引から外すもの（gitignore 形式）
+_backup_*/
+out/
+out_*/
+*.log
+*.patch
+*.diff
+*.mp3
+*.wav
+*.zip
+*.bat
+*.ps1
+*.json.bak
