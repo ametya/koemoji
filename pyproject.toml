@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "koemoji"
-version = "0.1.6"
+version = "0.2.0"
 description = "CPUだけで動くオフライン日本語文字起こしツール（faster-whisper / Windows・macOS・Linux対応）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,8 @@ dependencies = [
     "faster-whisper>=1.1.0",
     "av>=14,<19",
     "sherpa-onnx>=1.13.0",
+    "ctranslate2>=4.0",
+    "tokenizers>=0.20",
 ]
 
 [project.optional-dependencies]

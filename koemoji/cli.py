@@ -14,14 +14,19 @@ from .glossary import load_glossary
 from .models import (
     DEFAULT_EMBEDDING,
     DEFAULT_MODEL,
+    DEFAULT_SUMMARY_MODEL,
     DIARIZATION_CATALOG,
     MODEL_CATALOG,
+    SUMMARY_CATALOG,
     default_model_dir,
     diarization_model_path,
     ensure_diarization_model,
     ensure_model,
+    ensure_summary_model,
     is_downloaded,
+    is_summary_downloaded,
 )
+from .summary import SummaryCancelled, SummaryOptions, summarize_result, summarize_text
 
 
 def _fix_stdio() -> None:
@@ -133,7 +138,51 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-hallucinations", action="store_true",
         help="無音区間の幻覚とみなしたセグメントを削除しない",
     )
+    p_tr.add_argument(
+        "--summary", action="store_true",
+        help="文字起こし後に議事録（Markdown）も作成する（ルールベース・CPU）",
+    )
+    p_tr.add_argument(
+        "--summary-ai", action="store_true",
+        help="議事録をローカルLLMで整える（--summary を含む。初回のみモデルDL）",
+    )
+    p_tr.add_argument(
+        "--summary-model", choices=sorted(SUMMARY_CATALOG), default=DEFAULT_SUMMARY_MODEL,
+        help=f"議事録整形に使うローカルLLM（既定: {DEFAULT_SUMMARY_MODEL}）",
+    )
+    p_tr.add_argument(
+        "--summary-context", default=None,
+        help="議事録に補足する情報（顧客名・店舗名など。任意）",
+    )
+    p_tr.add_argument(
+        "--summary-transcript", action="store_true",
+        help="議事録の末尾に文字起こし全文を折りたたみで含める",
+    )
     p_tr.add_argument("-q", "--quiet", action="store_true", help="進捗表示を抑制")
+
+    p_s = sub.add_parser(
+        "summarize",
+        aliases=["sum"],
+        help="文字起こし済みテキストから議事録を作る",
+    )
+    p_s.add_argument("inputs", nargs="+", help="文字起こしファイル（.log / .txt / .srt / .vtt）")
+    p_s.add_argument("-o", "--output-dir", default=None, help="出力先ディレクトリ（既定: 入力ファイルと同じ場所）")
+    p_s.add_argument(
+        "--ai", action="store_true",
+        help="ローカルLLMで文章を整える（初回のみモデルDL。指定しない場合はルールベースのみ）",
+    )
+    p_s.add_argument(
+        "--model", dest="summary_model", choices=sorted(SUMMARY_CATALOG), default=DEFAULT_SUMMARY_MODEL,
+        help=f"議事録整形に使うローカルLLM（既定: {DEFAULT_SUMMARY_MODEL}）",
+    )
+    p_s.add_argument("--model-dir", default=None, help="モデル保存先ディレクトリ")
+    p_s.add_argument("--cpu-threads", type=int, default=None, help="AI整形に使うCPUスレッド数")
+    p_s.add_argument("--context", default=None, help="補足情報（顧客名・店舗名など。任意）")
+    p_s.add_argument(
+        "--include-transcript", action="store_true",
+        help="議事録の末尾に文字起こし全文を折りたたみで含める",
+    )
+    p_s.add_argument("-q", "--quiet", action="store_true", help="進捗表示を抑制")
 
     sub.add_parser("gui", help="GUI を起動する")
 
@@ -145,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_m.add_argument(
         "--download-diarization", action="store_true",
         help="話者分離用の声紋モデルを事前ダウンロード",
+    )
+    p_m.add_argument(
+        "--download-summary", metavar="NAME", action="append", default=None,
+        help="議事録整形用のローカルLLMを事前ダウンロード（複数指定可）",
     )
     p_m.add_argument(
         "--embedding", choices=["titanet", "3dspeaker"], default=DEFAULT_EMBEDDING,
@@ -243,6 +296,100 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         )
         print(detail)
 
+        if args.summary or args.summary_ai:
+            if not args.quiet:
+                print("\n  議事録を整理しています...")
+            summary_options = SummaryOptions(
+                use_llm="always" if args.summary_ai else "never",
+                model=args.summary_model,
+                model_dir=model_dir,
+                cpu_threads=args.cpu_threads,
+                include_transcript=args.summary_transcript,
+                context=args.summary_context,
+            )
+            try:
+                summary = summarize_result(
+                    result,
+                    summary_options,
+                    on_progress=_progress_printer(args.quiet),
+                )
+            except SummaryCancelled:
+                print("\n  議事録の作成をキャンセルしました")
+                exit_code = 130
+                continue
+            except Exception as exc:  # noqa: BLE001
+                print(f"\n  議事録の作成に失敗しました: {exc}")
+                exit_code = 1
+                continue
+            if not args.quiet:
+                print()
+            summary_path = outdir / f"{path.stem}.summary.md"
+            summary_path.write_text(
+                summary.to_markdown(include_transcript=args.summary_transcript),
+                encoding="utf-8",
+            )
+            print(f"  議事録: {summary_path}（{summary.method}）")
+            if summary.note:
+                print(f"  補足: {summary.note}")
+
+    return exit_code
+
+
+def cmd_summarize(args: argparse.Namespace) -> int:
+    options = SummaryOptions(
+        use_llm="always" if args.ai else "never",
+        model=args.summary_model,
+        model_dir=Path(args.model_dir) if args.model_dir else None,
+        cpu_threads=args.cpu_threads,
+        include_transcript=args.include_transcript,
+        context=args.context,
+    )
+    exit_code = 0
+    for raw in args.inputs:
+        path = Path(raw)
+        if not path.is_file():
+            print(f"エラー: ファイルが見つかりません: {path}")
+            exit_code = 1
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001
+            print(f"エラー: 読み込めません: {path}（{exc}）")
+            exit_code = 1
+            continue
+        if not text.strip():
+            print(f"エラー: 空のファイルです: {path}")
+            exit_code = 1
+            continue
+
+        print(f"== {path.name}")
+        try:
+            summary = summarize_text(
+                text,
+                options,
+                source=path,
+                on_progress=_progress_printer(args.quiet),
+            )
+        except SummaryCancelled:
+            print("\n  キャンセルしました")
+            return 130
+        except Exception as exc:  # noqa: BLE001
+            print(f"\n  エラー: {exc}")
+            exit_code = 1
+            continue
+        if not args.quiet:
+            print()
+
+        outdir = Path(args.output_dir) if args.output_dir else path.parent
+        outdir.mkdir(parents=True, exist_ok=True)
+        out_path = outdir / f"{path.stem}.summary.md"
+        out_path.write_text(
+            summary.to_markdown(include_transcript=args.include_transcript),
+            encoding="utf-8",
+        )
+        print(f"  書き出し: {out_path}（{summary.method}・{summary.elapsed:.1f}秒）")
+        if summary.note:
+            print(f"  補足: {summary.note}")
     return exit_code
 
 
@@ -278,7 +425,22 @@ def cmd_models(args: argparse.Namespace) -> int:
             return 1
         print("\n  準備完了（話者分離モデル）")
 
-    if args.download or args.download_diarization:
+    if args.download_summary:
+        for name in args.download_summary:
+            if name not in SUMMARY_CATALOG:
+                print(f"エラー: 未知の議事録モデル: {name}（利用可能: {', '.join(SUMMARY_CATALOG)}）")
+                return 2
+            print(f"議事録モデル「{name}」を準備しています（初回のみDL）...")
+            try:
+                ensure_summary_model(
+                    name, model_dir, progress_cb=_progress_bytes(_progress_printer(False))
+                )
+            except Exception as exc:
+                print(f"\n  エラー: {exc}")
+                return 1
+            print(f"\n  準備完了: {name}")
+
+    if args.download or args.download_diarization or args.download_summary:
         return 0
 
     print(f"モデル保存先: {model_dir}")
@@ -299,7 +461,17 @@ def cmd_models(args: argparse.Namespace) -> int:
         state = "取得済" if diarization_model_path(key, model_dir).is_file() else "未取得"
         print(f"  {key:<12}  {state}  {spec.size:<8}  {spec.note}")
     print()
-    print("  例: koemoji models --download small --download-diarization")
+    print("  【議事録整形モデル（--summary-ai / summarize --ai で使用）】")
+    print("  名前        状態    サイズ    速度      精度    備考")
+    print("  " + "-" * 72)
+    for name, spec in SUMMARY_CATALOG.items():
+        state = "取得済" if is_summary_downloaded(name, model_dir) else "未取得"
+        print(
+            f"  {name:<10}  {state}  {spec.download_size:<8}  {spec.speed:<8}  "
+            f"{spec.quality:<6}  {spec.note}"
+        )
+    print()
+    print("  例: koemoji models --download small --download-diarization --download-summary qwen3b")
     return 0
 
 
@@ -323,6 +495,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command in ("transcribe", "tr"):
         try:
             return cmd_transcribe(args)
+        except KeyboardInterrupt:
+            print("\nキャンセルしました")
+            return 130
+
+    if args.command in ("summarize", "sum"):
+        try:
+            return cmd_summarize(args)
         except KeyboardInterrupt:
             print("\nキャンセルしました")
             return 130

@@ -24,6 +24,7 @@ hiddenimports = [
     "koemoji.core",
     "koemoji.gui",
     "koemoji.models",
+    "koemoji.summary",
 ]
 
 for package in (

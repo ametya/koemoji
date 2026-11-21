@@ -149,6 +149,165 @@ def ensure_model(
 
 
 # ---------------------------------------------------------------------------
+# 議事録整形モデル（CTranslate2 / CPU・任意）
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SummaryModelSpec:
+    name: str
+    repo_id: str
+    download_size: str
+    speed: str
+    quality: str
+    note: str
+    template: str = "qwen"
+    label: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            object.__setattr__(self, "label", f"{self.note}（{self.name}）")
+
+
+SUMMARY_CATALOG: dict[str, SummaryModelSpec] = {
+    "qwen3b": SummaryModelSpec(
+        "qwen3b",
+        "jncraton/Qwen2.5-3B-Instruct-ct2-int8",
+        "約3.1GB",
+        "低速",
+        "高",
+        "標準・バランス（Qwen2.5 3B）",
+        "qwen",
+    ),
+    "qwen1.5b": SummaryModelSpec(
+        "qwen1.5b",
+        "jncraton/Qwen2.5-1.5B-Instruct-ct2-int8",
+        "約1.6GB",
+        "高速",
+        "中",
+        "軽量（Qwen2.5 1.5B・Apache-2.0）",
+        "qwen",
+    ),
+    "gemma2b": SummaryModelSpec(
+        "gemma2b",
+        "keisuke-miyako/gemma-2-2b-jpn-it-ct2-int8",
+        "約2.6GB",
+        "標準",
+        "中〜高",
+        "日本語特化（Gemma 2 2B JPN）",
+        "gemma",
+    ),
+}
+
+DEFAULT_SUMMARY_MODEL = "qwen3b"
+
+_SUMMARY_ALLOW_PATTERNS = (
+    "config.json",
+    "model.bin",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocabulary.json",
+    "vocabulary.txt",
+    "shared_vocabulary.json",
+    "generation_config.json",
+    "special_tokens_map.json",
+    "tokenizer.model",
+    "preprocessor_config.json",
+)
+
+
+def _summary_snapshot(repo_id: str, cache_dir: Path, local_only: bool) -> str:
+    from huggingface_hub import snapshot_download
+
+    kwargs = dict(
+        repo_id=repo_id,
+        cache_dir=str(cache_dir),
+        local_files_only=local_only,
+        allow_patterns=list(_SUMMARY_ALLOW_PATTERNS),
+    )
+    return snapshot_download(**kwargs)
+
+
+def summary_model_path(name: str, model_dir: Optional[Path] = None) -> Optional[Path]:
+    """取得済みならモデルのスナップショットパスを返す（通信しない）。"""
+    spec = SUMMARY_CATALOG[name]
+    cache_dir = Path(model_dir) if model_dir else default_model_dir()
+    try:
+        path = Path(_summary_snapshot(spec.repo_id, cache_dir, local_only=True))
+    except Exception:
+        return None
+    for required in ("config.json", "model.bin", "tokenizer.json"):
+        if not (path / required).is_file():
+            return None
+    return path
+
+
+def is_summary_downloaded(name: str, model_dir: Optional[Path] = None) -> bool:
+    return summary_model_path(name, model_dir) is not None
+
+
+def ensure_summary_model(
+    name: str = DEFAULT_SUMMARY_MODEL,
+    model_dir: Optional[Path] = None,
+    progress_cb: Optional[ProgressCallback] = None,
+) -> str:
+    """議事録整形モデルをローカルに用意してスナップショットパスを返す。"""
+    if name not in SUMMARY_CATALOG:
+        raise KeyError(f"未知の議事録モデル: {name}（利用可能: {', '.join(SUMMARY_CATALOG)}）")
+    cached = summary_model_path(name, model_dir)
+    if cached is not None:
+        return str(cached)
+
+    from huggingface_hub import HfApi, hf_hub_download
+    from tqdm.auto import tqdm
+
+    spec = SUMMARY_CATALOG[name]
+    cache_dir = Path(model_dir) if model_dir else default_model_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        info = HfApi().model_info(spec.repo_id, files_metadata=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"議事録モデル「{name}」のダウンロード情報を取得できませんでした。"
+            "初回のみインターネット接続が必要です。"
+        ) from exc
+
+    files = [
+        s
+        for s in info.siblings
+        if not s.rfilename.startswith(".") and s.rfilename in _SUMMARY_ALLOW_PATTERNS
+    ]
+    if not files:
+        raise RuntimeError(f"議事録モデル「{name}」に必要なファイルが見つかりませんでした。")
+    total = max(sum(s.size or 0 for s in files), 1)
+    lock = threading.Lock()
+    done_before = 0
+
+    for sibling in files:
+        fname = sibling.rfilename
+        fsize = sibling.size or 0
+
+        class _ProgressTqdm(tqdm):
+            def update(self, n: int = 1):
+                result = super().update(n)
+                if progress_cb is not None:
+                    with lock:
+                        done = done_before + min(int(self.n), fsize or int(self.n))
+                        progress_cb(min(done, total), total)
+                return result
+
+        hf_hub_download(spec.repo_id, fname, cache_dir=str(cache_dir), tqdm_class=_ProgressTqdm)
+        done_before += fsize
+
+    if progress_cb is not None:
+        progress_cb(total, total)
+    path = summary_model_path(name, model_dir)
+    if path is None:
+        raise RuntimeError(f"議事録モデル「{name}」の準備が完了しませんでした。")
+    return str(path)
+
+
+# ---------------------------------------------------------------------------
 # 話者分離モデル（sherpa-onnx の声紋抽出 / CPU）
 # ---------------------------------------------------------------------------
 

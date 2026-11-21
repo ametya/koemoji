@@ -10,6 +10,7 @@ GIGAZINE で紹介された [Embedding Gemma Transcribe](https://gigazine.net/ne
 
 - 音声ファイル（wav / mp3 / m4a / flac など）と**動画ファイル（Teams・Zoom録画の mp4 / mkv / mov など）**の文字起こし
 - **話者分離**: 複数人の会話を「誰が話したか」付きの会話ログに
+- **議事録の自動作成**: 文字起こしから、概要・要望・回答・保留・次のアクション・日付を整理（任意でローカルAIが文章を整形）
 - 字幕ファイル（SRT / WebVTT）の出力
 - 完全ローカル処理（音声は外部に送信されません・CPUのみ・GPU不要）
 
@@ -31,6 +32,7 @@ GIGAZINE で紹介された [Embedding Gemma Transcribe](https://gigazine.net/ne
 - **日本語に最適化**（言語固定 `ja`、VAD で無音区間を自動スキップ）
 - **幅広い入力形式**: wav / mp3 / m4a / aac / flac / ogg / opus / wma / amr / aiff、動画は mp4 / mkv / mov / avi / webm / wmv / mpg / ts / mts / 3gp など
 - **話者分離**（会議・インタビュー・鼎談など、複数人の会話を会話ログ化）
+- **議事録の自動作成**（概要・要望・回答・保留・ToDo・日付を整理。任意でローカルAI整形）
 - **GUI（tkinter）と CLI の両方**。GUI は exe をダブルクリックするだけ
 - **txt / 会話ログ / SRT / VTT 字幕**出力
 - **固有名詞ヒント機能**（`--initial-prompt`）で人名・社名の認識率を改善
@@ -84,7 +86,8 @@ koemoji-gui.exe    # 配布版の場合
 2. モデルを選択（迷ったら既定の `turbo` のまま。軽さ重視なら `small`）
 3. 会議なら「**話者分離**」にチェック（話者数は通常「自動」。うまく分かれない場合だけ人数を指定）
 4. 必要なら「ヒント文」や「**用語集**」を指定（固有名詞の認識改善・誤認識の自動修正）
-5. 「文字起こし開始」→ 完了後にコピー / 保存（txt・会話ログ・SRT・VTT）
+5. 必要なら「**議事録を作る**」にチェック（さらに「ローカルAIで文章を整える」も選べます）
+6. 「文字起こし開始」→ 完了後に「文字起こし」「議事録」タブを切り替えてコピー / 保存（txt・会話ログ・SRT・VTT・Markdown）
 
 ### CLI
 
@@ -107,6 +110,17 @@ koemoji transcribe 会議録画.mp4 --diarize --glossary 用語集.txt
 # モデル一覧と事前ダウンロード（配布先でオフライン運用したい場合など）
 koemoji models
 koemoji models --download turbo --download-diarization
+koemoji models --download-summary qwen3b
+
+# 文字起こしと同時に議事録も作成（ルールベース・追加モデル不要）
+koemoji transcribe 会議録画.mp4 --diarize --formats log --summary
+
+# ローカルAIで議事録の文章を整える（初回のみ約3.1GBのモデルDL）
+koemoji transcribe 会議録画.mp4 --diarize --formats log --summary-ai
+
+# 文字起こし済みのファイルから議事録だけを作る
+koemoji summarize 会議録画.log
+koemoji summarize 会議録画.log --ai --model qwen1.5b
 ```
 
 | オプション | 説明 | 既定 |
@@ -131,7 +145,62 @@ koemoji models --download turbo --download-diarization
 | `--no-resegment` | 長文の自動折り返しを行わない | 折り返し有効 |
 | `--keep-hallucinations` | 無音区間の幻覚（`ご視聴ありがとうございました` 等）の自動除去を無効化 | 除去有効 |
 | `--cpu-threads` | 使用スレッド数 | 自動（全コア） |
+| `--summary` | 文字起こし後に議事録（Markdown）も作成 | オフ |
+| `--summary-ai` | 議事録をローカルLLMで整形（`--summary` を含む） | オフ |
+| `--summary-model` | 整形に使うモデル（`qwen3b` / `qwen1.5b` / `gemma2b`） | `qwen3b` |
+| `--summary-context` | 議事録に補足する顧客名・店舗名など（任意） | なし |
+| `--summary-transcript` | 議事録の末尾に文字起こし全文を折りたたみで含める | オフ |
 | `-q, --quiet` | 進捗表示を抑制 | - |
+
+## 議事録（要約）機能
+
+文字起こしの結果から、人がすぐ読める議事録を Markdown で作ります。**CPUだけで動き、音声もテキストも外部に送信しません。**
+
+- **ルールベース（既定）**: 追加モデル不要。発話から「要望・依頼」「回答・説明」「確認中・保留」「次のアクション」「重要な日付・数値」「人物・組織」を抽出して整理します。文字起こし直後から使えます。
+- **ローカルAI整形（任意）**: 抽出済みの事実だけを入力に、小型LLMが重複や話し言葉を整えます。事実に無い日付・人名は検証して捨てるため、創作されにくい設計です。初回のみモデルのダウンロードが必要です。
+
+出力例:
+
+```markdown
+# 宮永薬局・データ移行の確認
+
+## 概要
+
+宮永薬局から、来年1月に導入するデモ機へ現行レセコンの患者・処方データを移してよいか確認があった。…
+
+## 要望・依頼
+
+- デモ機（親機）に現行レセコンの患者・処方データを移したい
+- 親機に入れたデータを子機3台からも参照できるか確認したい
+
+## 回答・説明
+
+- データのファイルを写すこと自体は問題ない
+- 親機に入れれば子機からも参照できる
+
+## 確認中・保留
+
+- 通常と異なるため、担当者に確認して折り返す
+
+## 次のアクション
+
+- [ ] モイネットシステム：担当者に確認し、平岡様へ折り返し連絡
+
+## 重要な日付・数値
+
+- 来年1月 — 導入予定
+- 12月 — 現行契約の終了・データ取得の期限
+```
+
+### 議事録整形モデル（任意・初回DL）
+
+| 名前 | DLサイズ | 速度 | 精度 | 備考 |
+|---|---|---|---|---|
+| **qwen3b** | 約3.1GB | 低速（数分） | 高 | 既定。バランス重視 |
+| qwen1.5b | 約1.6GB | 高速 | 中 | 軽量。まず試すならこちら |
+| gemma2b | 約2.6GB | 標準 | 中〜高 | 日本語特化（Gemma 2 2B JPN） |
+
+> AI整形は CPU の性能によっては数分かかります。急ぎの場合や非力な PC では、ルールベースのみ（`--summary`）がおすすめです。文字起こしの誤認識が多い録音では、AIが文脈から補正することがありますが、内容の最終確認は必ず行ってください。
 
 ## モデル選択の目安（CPU・int8）
 
@@ -210,9 +279,9 @@ koemoji tr 通話.mp3 --diarize --speakers 2 --glossary 用語集.txt --no-gloss
 
 ## 完全オフラインで使う
 
-- 一度モデルをダウンロードすれば、以後の文字起こし・話者分離は通信しません
+- 一度モデルをダウンロードすれば、以後の文字起こし・話者分離・議事録作成は通信しません
 - 別のPCへは `%LOCALAPPDATA%\koemoji\models` フォルダをコピーすれば、そのままオフライン運用できます
-- `koemoji models --download turbo --download-diarization` で事前ダウンロードしておくと安心です
+- `koemoji models --download turbo --download-diarization --download-summary qwen3b` で事前ダウンロードしておくと安心です
 
 ## ビルド（配布用 zip の作成）
 
